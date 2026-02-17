@@ -7,96 +7,123 @@ import traceback
 
 app = Flask(__name__)
 
-# Pasta temporária para processamento de áudio no Railway
+# Configura pasta temporária
 UPLOAD_FOLDER = 'temp_audio'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-def download_file(url, file_type):
-    """ Baixa um arquivo de uma URL e loga o processo. """
-    print(f"[DOWNLOAD] Tentando baixar {file_type} de: {url}")
-    local_filename = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp3")
+def download_file(url, label):
+    """ Baixa o arquivo e gera erro detalhado em caso de falha """
+    print(f"[DOWNLOAD] Iniciando: {label} de {url}")
+    local_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp3")
+    
     try:
+        # Timeout de 15 segundos para evitar travamentos
         with requests.get(url, stream=True, timeout=15) as r:
-            r.raise_for_status()
-            with open(local_filename, 'wb') as f:
+            if r.status_code != 200:
+                raise Exception(f"Servidor retornou erro HTTP {r.status_code}")
+            
+            with open(local_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        print(f"[DOWNLOAD] Sucesso! Arquivo salvo em: {local_filename}")
-        return local_filename
-    except requests.exceptions.RequestException as e:
-        print(f"[DOWNLOAD] FALHA CRÍTICA ao baixar {file_type}: {e}")
-        raise ValueError(f"Não foi possível acessar o arquivo de {file_type}. Verifique a URL e permissões. (Erro: {e})")
-
+        
+        print(f"[DOWNLOAD] Concluído: {label}")
+        return local_path
+    except Exception as e:
+        print(f"[ERRO DOWNLOAD] {label}: {str(e)}")
+        # Se falhou, garante que não deixou rastro
+        if os.path.exists(local_path):
+            os.remove(local_path)
+        raise Exception(f"Falha ao baixar {label}: {str(e)}")
 
 @app.route('/mix', methods=['POST'])
 def mix_audio():
-    narration_path = None
-    sfx_paths = []
-    music_path = None
+    # Lista para limpeza de arquivos temporários
+    tmp_files = []
     
     try:
         data = request.json
         if not data:
-            return jsonify({"success": False, "error": "JSON inválido"}), 400
-        print(f"[INFO] Receita de mixagem recebida: {data}")
+            return jsonify({"success": False, "error": "JSON não recebido ou inválido"}), 400
 
-        # 1. Carrega a Narração (Base)
-        narration_path = download_file(data['narration_url'], "narração")
-        combined = AudioSegment.from_file(narration_path)
-        print("[PROCESS] Narração carregada para a Pydub.")
+        print(f"[INFO] Nova solicitação recebida.")
 
-        # 2. Aplica os Efeitos Sonoros (SFX)
+        # 1. CARREGA A NARRAÇÃO (BASE)
+        if 'narration_url' not in data:
+            return jsonify({"success": False, "error": "URL da narração ausente"}), 400
+            
+        nar_file = download_file(data['narration_url'], "Narração")
+        tmp_files.append(nar_file)
+        combined = AudioSegment.from_file(nar_file)
+
+        # 2. APLICA OS EFEITOS SONOROS (SFX)
         sfx_list = data.get('sfx_list', [])
-        for sfx in sfx_list:
-            sfx_path = download_file(sfx['url'], f"efeito {sfx.get('name', '')}")
-            sfx_paths.append(sfx_path)
-            effect = AudioSegment.from_file(sfx_path)
+        for i, sfx in enumerate(sfx_list):
+            sfx_url = sfx.get('url')
+            if not sfx_url: continue
             
-            effect += float(sfx.get('volume', 0))
-            position_ms = float(sfx['time']) * 1000
-            combined = combined.overlay(effect, position=position_ms)
-        print(f"[PROCESS] {len(sfx_paths)} efeitos aplicados.")
+            sfx_file = download_file(sfx_url, f"Efeito_{i}")
+            tmp_files.append(sfx_file)
+            
+            effect = AudioSegment.from_file(sfx_file)
+            
+            # Ajuste de Volume
+            vol = float(sfx.get('volume', 0))
+            effect = effect + vol
+            
+            # Sobreposição (Time em Segundos -> Milissegundos)
+            pos_ms = float(sfx.get('time', 0)) * 1000
+            combined = combined.overlay(effect, position=pos_ms)
 
-        # 3. Aplica a Trilha Sonora (Se houver)
+        # 3. APLICA A TRILHA SONORA (Se houver)
         if data.get('music_url'):
-            music_path = download_file(data['music_url'], "trilha")
-            music = AudioSegment.from_file(music_path)
-            settings = data.get('music_settings', {})
+            mus_file = download_file(data['music_url'], "Trilha")
+            tmp_files.append(mus_file)
             
-            music += float(settings.get('volume_db', -14))
-            intro_ms = float(settings.get('intro_time', 2.0)) * 1000
+            music = AudioSegment.from_file(mus_file)
+            m_settings = data.get('music_settings', {})
+            
+            # Volume da trilha
+            m_vol = float(m_settings.get('volume_db', -14))
+            music = music + m_vol
+            
+            # Tempo de entrada da voz
+            intro_ms = float(m_settings.get('intro_time', 2.0)) * 1000
+            
+            # A trilha é a base, a voz entra por cima dela
             combined = music.overlay(combined, position=intro_ms)
-            print("[PROCESS] Trilha sonora aplicada.")
 
-        # 4. Exporta o Resultado
-        output_filename = f"mixed_{uuid.uuid4()}.mp3"
-        output_path = os.path.join(UPLOAD_FOLDER, output_filename)
-        print(f"[EXPORT] Exportando áudio final para: {output_path}")
-        combined.export(output_path, format="mp3", bitrate="192k")
+        # 4. EXPORTAÇÃO FINAL
+        output_name = f"final_{uuid.uuid4()}.mp3"
+        output_path = os.path.join(UPLOAD_FOLDER, output_name)
         
+        combined.export(output_path, format="mp3", bitrate="192k")
+        print(f"[SUCESSO] Mixagem concluída: {output_name}")
+
         host_url = request.host_url.rstrip('/')
         return jsonify({
             "success": True,
-            "mixed_audio_url": f"{host_url}/download/{output_filename}",
+            "mixed_audio_url": f"{host_url}/download/{output_name}",
             "duration": combined.duration_seconds
         })
 
     except Exception as e:
-        print(f"[ERRO FATAL] {traceback.format_exc()}")
-        return jsonify({"success": False, "error": f"Erro no motor de mixagem: {type(e).__name__} - {e}"}), 500
+        # LOG DETALHADO NO RAILWAY
+        error_trace = traceback.format_exc()
+        print(f"[ERRO CRÍTICO]\n{error_trace}")
+        
+        # RESPOSTA ÚTIL PARA O PHP
+        return jsonify({
+            "success": False, 
+            "error": f"Erro no Motor Python: {str(e)}"
+        }), 500
 
     finally:
-        # Limpa todos os arquivos temporários
-        if narration_path and os.path.exists(narration_path):
-            os.remove(narration_path)
-        if music_path and os.path.exists(music_path):
-            os.remove(music_path)
-        for path in sfx_paths:
-            if os.path.exists(path):
-                os.remove(path)
-        print("[CLEANUP] Arquivos temporários limpos.")
-
+        # LIMPEZA DE ARQUIVOS DE ORIGEM (MANTÉM APENAS O RESULTADO)
+        for f in tmp_files:
+            if os.path.exists(f):
+                try: os.remove(f)
+                except: pass
 
 @app.route('/download/<filename>')
 def download_output(filename):
