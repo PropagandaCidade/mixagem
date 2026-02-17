@@ -18,7 +18,7 @@ def download_file(url, file_type):
     local_filename = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.mp3")
     try:
         with requests.get(url, stream=True, timeout=15) as r:
-            r.raise_for_status()  # Isso vai gerar um erro para status como 404, 403, etc.
+            r.raise_for_status()
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
@@ -26,8 +26,7 @@ def download_file(url, file_type):
         return local_filename
     except requests.exceptions.RequestException as e:
         print(f"[DOWNLOAD] FALHA CRÍTICA ao baixar {file_type}: {e}")
-        # Retorna um erro específico que podemos mostrar ao usuário
-        raise ValueError(f"Não foi possível acessar o arquivo de {file_type}. Verifique se a URL está correta e acessível publicamente. (Erro: {e})")
+        raise ValueError(f"Não foi possível acessar o arquivo de {file_type}. Verifique a URL e permissões. (Erro: {e})")
 
 
 @app.route('/mix', methods=['POST'])
@@ -39,7 +38,7 @@ def mix_audio():
     try:
         data = request.json
         if not data:
-            return jsonify({"success": False, "error": "JSON inválido"}), 400
+            return jsonify({"success": False, "error": "JSON inválido"}), 400
         print(f"[INFO] Receita de mixagem recebida: {data}")
 
         # 1. Carrega a Narração (Base)
@@ -84,12 +83,11 @@ def mix_audio():
         })
 
     except Exception as e:
-        # NOVO: Retorna o erro exato que aconteceu no Python
         print(f"[ERRO FATAL] {traceback.format_exc()}")
         return jsonify({"success": False, "error": f"Erro no motor de mixagem: {type(e).__name__} - {e}"}), 500
 
     finally:
-        # Limpa todos os arquivos temporários, mesmo se der erro
+        # Limpa todos os arquivos temporários
         if narration_path and os.path.exists(narration_path):
             os.remove(narration_path)
         if music_path and os.path.exists(music_path):
@@ -106,5 +104,4 @@ def download_output(filename):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)```
-
+    app.run(host='0.0.0.0', port=port)
