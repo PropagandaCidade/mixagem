@@ -85,7 +85,16 @@ def mix_audio():
         output_name = f"final_{uuid.uuid4()}.mp3"
         output_path = os.path.join(UPLOAD_FOLDER, output_name)
         
-        combined.export(output_path, format="mp3", bitrate="192k")
+        # --- ALTERAÇÃO REALIZADA AQUI ---
+        # Adicionado parâmetros de codec e sample rate para garantir um MP3 real e compatível
+        combined.export(
+            output_path, 
+            format="mp3", 
+            bitrate="192k", 
+            parameters=["-ar", "44100", "-codec:a", "libmp3lame"]
+        )
+        # --------------------------------
+        
         print(f"[SUCESSO] Mixagem concluida: {output_name}")
 
         host_url = request.host_url.rstrip('/')
@@ -114,7 +123,5 @@ def download_output(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 if __name__ == '__main__':
-    # Esta linha garante que, se rodar localmente, usa a porta 5000.
-    # No Railway, o Gunicorn assume o controle através do Dockerfile.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
