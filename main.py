@@ -90,7 +90,7 @@ def mix_audio():
         combined.export(
             output_path, 
             format="mp3", 
-            bitrate="192k", 
+            bitrate="320k", 
             parameters=["-ar", "44100", "-codec:a", "libmp3lame"]
         )
         # --------------------------------
